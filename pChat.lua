@@ -1,7 +1,7 @@
 --[[
 Author: DesertDwellers
 Filename: pChat.lua
-Version: 9.4.0.23.b3
+Version: 9.3.4.23
 ]]--
 
 --  pChat object will receive functions
@@ -9,7 +9,7 @@ pChat = pChat or {}
 
 -- Common
 local ADDON_NAME		= "pChat"
-local ADDON_VERSION	= "9.4.0.23.b3"
+local ADDON_VERSION	= "9.3.4.23"
 local ADDON_AUTHOR	= "DesertDwellers"
 local ADDON_WEBSITE	= "http://www.esoui.com/downloads/info93-pChat.html"
 

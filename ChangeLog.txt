@@ -1,7 +1,10 @@
-﻿## v9.4.0.23##  ** Not released ** Testing to make sure I did not break anything **
--- Attempted fix for bad argumnet error at line 1407 (b2)
--- Restructred Settings menu, using submenus instead of annoying long list. (b3)
+﻿## v9.3.4.23 ## 
+===============
+-- A fix put into place for line 1407 reported as a bad argument by Itabit
+-- Restructred Settings menu, using submenus instead of annoying long list.
 -- Changed default window darkness to 6 instead of 1.
+
+Notes:  I have not been able to duplicate the bad argument error reported by Itabit, however, he found a solution was to start with a fresh saved vars.  I did code a fix, however I cannot confirm it will work at this point.  Please report any problems you may get with this release.
 
 v9.3.2.23
 =========
