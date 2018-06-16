@@ -49,7 +49,7 @@ local defaults = {
 	chatMinimizedAtLaunch = false,
 	chatMinimizedInMenus = false,
 	chatMaximizedAfterMenus = false,
-	windowDarkness = 1,
+	windowDarkness = 6,
 	chatSyncConfig = true,
 	floodProtect = true,
 	floodGracePeriod = 30,
@@ -4659,10 +4659,6 @@ local function BuildLAMPanel()
 	-- LAM Message Settings
 	
 	local fontsDefined = LMP:List('font')
-	local guildMax = GetNumGuilds()
-	local curGuildName = ""
-
-	d("Max Guilds "..guildMax)
 	
 	local function ConvertHexToRGBAPacked(colourString)
 		local r, g, b, a = ConvertHexToRGBA(colourString)
@@ -4680,30 +4676,19 @@ local function BuildLAMPanel()
 		table.insert(pChatData.chatConfSyncChoices, pChatData.localPlayer)
 	end
 	
-	-- Gather Guild Info
-	-- Guildname
-	--local guildIdx1 = GetGuildID(1)
-	--guildName1 = GetGuildName(guildId1)
-		
-	--		-- Occurs sometimes
-	--		if(not guildName or (guildName):len() < 1) then
-	--			guildName = "Guild " .. guildId
-	--		end
-	--	else
-	--		guildID[guild] = 0
-	--		guildName[guild] = "Guild "..guild
-	--	end
-	--	-- If recently added to a new guild and never go in menu db.formatguild[guildName] won't exist
-	--	curGuildName = guildName[guild]
-	--	if not (db.formatguild[curGuildName]) then
-	--		-- 2 is default value
-	--		db.formatguild[curGuildName] = 2
-	--	end	
-	--end
-	--local index = 0
+	-- CHAT_SYSTEM.primaryContainer.windows doesn't exists yet at OnAddonLoaded. So using the pChat reference.
+	local arrayTab = {}
+	if db.chatConfSync and db.chatConfSync[pChatData.localPlayer] and db.chatConfSync[pChatData.localPlayer].tabs then
+		for numTab, data in pairs (db.chatConfSync[pChatData.localPlayer].tabs) do
+			table.insert(arrayTab, numTab)
+		end
+	else
+		table.insert(arrayTab, 1)
+	end
+	
+
 	local optionsData = {}
-	-- LAM Message Settings
-	--index = index + 1
+
 	
 	optionsData[#optionsData + 1] = {
 		type = "submenu",
@@ -4796,7 +4781,7 @@ local function BuildLAMPanel()
 				width = "full",
 				default = defaults.alwaysShowChat,
 			},
-			{
+			{-- Augment lines of chat
 				type = "checkbox",
 				name = GetString(PCHAT_AUGMENTHISTORYBUFFER),
 				tooltip = GetString(PCHAT_AUGMENTHISTORYBUFFERTT),
@@ -4866,7 +4851,7 @@ local function BuildLAMPanel()
 					GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_OFFICER_3),
 					GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_OFFICER_4),
 					GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_OFFICER_5)
-					},
+				},
 				width = "full",
 				default = defaults.defaultchannel,
 				getFunc = function() return GetString("PCHAT_DEFAULTCHANNELCHOICE", db.defaultchannel) end,
@@ -4901,6 +4886,7 @@ local function BuildLAMPanel()
 						-- When user click on LAM reinit button
 						db.defaultchannel = defaults.defaultchannel
 					end
+					
 				end,
 			},
 			{-- CHAT_SYSTEM.primaryContainer.windows doesn't exists yet at OnAddonLoaded. So using the pChat reference.
@@ -4911,16 +4897,7 @@ local function BuildLAMPanel()
 				width = "full",
 				default = defaults.defaultTab,
 				getFunc = function() return db.defaultTab end,
-				setFunc = function(choice)
-					local arrayTab = {}
-					if db.chatConfSync and db.chatConfSync[pChatData.localPlayer] and db.chatConfSync[pChatData.localPlayer].tabs then
-						for numTab, data in pairs (db.chatConfSync[pChatData.localPlayer].tabs) do
-							table.insert(arrayTab, numTab)
-						end
-					else
-						table.insert(arrayTab, 1)
-					end
-					db.defaultTab = choice end,
+				setFunc = function(choice) db.defaultTab = choice end,
 			},
 			{-- Disable Brackets
 				type = "checkbox",
