@@ -35,7 +35,52 @@ SafeAddString(PCHAT_Tab9										,"Select Chat Tab 9",1)
 SafeAddString(PCHAT_Tab10										,"Select Chat Tab 10",1)
 SafeAddString(PCHAT_Tab11										,"Select Chat Tab 11",1)
 SafeAddString(PCHAT_Tab12										,"Select Chat Tab 12",1)
+	-- 9.3.6.24 Additions
+SafeAddString(PCHAT_CHATTABH										,"Chat Tab Settings",1)
+SafeAddString(PCHAT_enableChatTabChannel						,"Enable Chat Tab Last Used Channel",1)
+SafeAddString(PCHAT_enableChatTabChannelT						,"Enable chat tabs to remember the last used channel, it will become the default until you opt to use a different one in that tab.",1)
+SafeAddString(PCHAT_enableWhisperTab							,"Enable Redirect Whisper",1)
+SafeAddString(PCHAT_enableWhisperTabT							,"Enable Redirect Whisper to a specific tab.",1)
+--9.3.11.24 Additions
+SafeAddString(PCHAT_CHAT_TAB_CHANNELS,"Chat Tab Channels",1)
+SafeAddString(PCHAT_SETTINGS_CHAT_TAB_DESC,"General chat tab settings, further down the settings menu there is settings to set chat channels for each tab.",1)
+SafeAddString(PCHAT_SETTINGS_MESSAGE_SETTINGS_DESC,"General settings of how messages appear, color options, lines displayed, clickable links, and more",1)
+SafeAddString(PCHAT_SETTINGS_PARTY_CHANNEL_TWEAKS,"Tweaks to group/party chat. including default group channel setup.",1)
+SafeAddString(PCHAT_SETTINGS_SYNC_DESC,"Setting up chat sync operations, that will sync the settings of the chat window between characters.",1)
+SafeAddString(PCHAT_SETTINGS_APPARENCEMH_DESC,"Chat Window appearance settings",1)
+SafeAddString(PCHAT_SETTINGS_IM_DESC,"Whisper/Tell tweaks and settings.",1)
+SafeAddString(PCHAT_SETTINGS_RESTORECHAT_DESC,"Settings for how to handle Chat Restore.  History of chat is saved for a pre determined amount of time.",1)
 
+SafeAddString(PCHAT_CHAT_CHANNEL_SAY,"Say",1)
+SafeAddString(PCHAT_CHAT_CHANNEL_YELL,"Yell",1)
+SafeAddString(PCHAT_CHAT_CHANNEL_WHISPER,"Whisper Incoming/Outgoing",1)
+SafeAddString(PCHAT_CHAT_CHANNEL_ZONE,"Zone",1)
+SafeAddString(PCHAT_CHAT_CHANNEL_PARTY,"Party/Group",1)
+SafeAddString(PCHAT_CHAT_CHANNEL_EMOTE,"Emote",1)
+SafeAddString(PCHAT_CHAT_CHANNEL_SYSTEM,"System",1)
+SafeAddString(PCHAT_GUILD,"Guild",1)
+SafeAddString(PCHAT_OFFICER,"Officer",1)
+SafeAddString(PCHAT_CHAT_CHANNEL_GUILD_1,"Guild 1",1)
+SafeAddString(PCHAT_CHAT_CHANNEL_GUILD_OFFICER_1,"Guild 1 Officer",1)
+SafeAddString(PCHAT_CHAT_CHANNEL_GUILD_2,"Guild 2",1)
+SafeAddString(PCHAT_CHAT_CHANNEL_GUILD_OFFICER_2,"Guild 2 Officer",1)
+SafeAddString(PCHAT_CHAT_CHANNEL_GUILD_3,"Guild 3",1)
+SafeAddString(PCHAT_CHAT_CHANNEL_GUILD_OFFICER_3,"Guild 3 Officer",1)
+SafeAddString(PCHAT_CHAT_CHANNEL_GUILD_4,"Guild 4",1)
+SafeAddString(PCHAT_CHAT_CHANNEL_GUILD_OFFICER_4,"Guild 4 Officer",1)
+SafeAddString(PCHAT_CHAT_CHANNEL_GUILD_5,"Guild 5",1)
+SafeAddString(PCHAT_CHAT_CHANNEL_GUILD_OFFICER_5,"Guild 5 Officer",1)
+SafeAddString(PCHAT_CHAT_CHANNEL_MONSTER,"NPC (Monster Say/Yell/Whisper/Emote)",1)
+SafeAddString(PCHAT_CHAT_CHANNEL_ZONE,"Zone",1)
+SafeAddString(PCHAT_CHAT_CHANNEL_ZONE_EN,"Zone - English",1)
+SafeAddString(PCHAT_CHAT_CHANNEL_ZONE_GR,"Zone - German",1)
+SafeAddString(PCHAT_CHAT_CHANNEL_ZONE_FR,"Zone - French",1)
+SafeAddString(PCHAT_CHAT_CHANNEL_ZONE_JP,"Zone - Japanese",1)
+
+
+
+
+	
 
 -- New Need Translations
 

@@ -1,7 +1,7 @@
 --[[
 Author: DesertDwellers
 Filename: pChat.lua
-Version: 9.3.4.23
+Version: 9.4.0.25 beta9
 ]]--
 
 --  pChat object will receive functions
@@ -9,17 +9,27 @@ pChat = pChat or {}
 
 -- Common
 local ADDON_NAME		= "pChat"
-local ADDON_VERSION	= "9.3.4.23"
+local ADDON_VERSION	= "9.4.0.25 beta9"
 local ADDON_AUTHOR	= "DesertDwellers"
 local ADDON_WEBSITE	= "http://www.esoui.com/downloads/info93-pChat.html"
 
 -- Init
 local isAddonLoaded			= false -- OnAddonLoaded() done
 local isAddonInitialized	= false
+local isLAMRebuilt			= false
+local prevGroupTabIdx = 0
+local prevGroupChannel = 0
+local partyActive = false
+local suspendDefaultChannel = false
+local isFirstOnPlayerActivated = true
+local booFCOCTB = false
+
+--local activeGroup = false
 
 -- Default variables to push in SavedVars
 local defaults = {
 	-- LAM handled
+	--overFCOCTB = false,
 	showGuildNumbers = false,
 	allGuildsSameColour = false,
 	allZonesSameColour = true,
@@ -43,7 +53,14 @@ local defaults = {
 	defaultchannel = CHAT_CHANNEL_GUILD_1,
 	soundforincwhisps = SOUNDS.NEW_NOTIFICATION,
 	enablecopy = true,
+	enableChatTabChannel = false,
+	enableChatTabDefault = false,
+	defaultTabChannel = {},
+	defaultChatTabChannelLock = {},
 	enablepartyswitch = true,
+	partyTabName = "",
+	partyTab = 1,
+	enableWhisperTab = false,
 	groupLeader = false,
 	disableBrackets = true,
 	chatMinimizedAtLaunch = false,
@@ -68,6 +85,7 @@ local defaults = {
 	notifyIM = false,
 	nicknames = "",
 	defaultTab = 1,
+	defaultTabName = "",
 	groupNames = 1,
 	geoChannelsFormat = 2,
 	urlHandling = true,
@@ -229,6 +247,9 @@ pChatData.defaultChannels = {
 	PCHAT_CHANNEL_NONE,
 	CHAT_CHANNEL_ZONE,
 	CHAT_CHANNEL_SAY,
+	CHAT_CHANNEL_PARTY,
+	CHAT_CHANNEL_YELL,
+	CHAT_CHANNEL_EMOTE,
 	CHAT_CHANNEL_GUILD_1,
 	CHAT_CHANNEL_GUILD_2,
 	CHAT_CHANNEL_GUILD_3,
@@ -239,6 +260,10 @@ pChatData.defaultChannels = {
 	CHAT_CHANNEL_OFFICER_3,
 	CHAT_CHANNEL_OFFICER_4,
 	CHAT_CHANNEL_OFFICER_5,
+	CHAT_CHANNEL_ZONE_LANGUAGE_1,
+	CHAT_CHANNEL_ZONE_LANGUAGE_2,
+	CHAT_CHANNEL_ZONE_LANGUAGE_3,
+	CHAT_CHANNEL_ZONE_LANGUAGE_4,
 }
 
 local chatStrings =
@@ -266,10 +291,11 @@ local chatStrings =
 }
 
 -- Registering librairies
-local LAM = LibStub('LibAddonMenu-2.0')
-local PCHATLC = LibStub('libChat-1.0')
-local LMP = LibStub('LibMediaProvider-1.0')
+local LAM = LibStub("LibAddonMenu-2.0")
+local PCHATLC = LibStub("libChat-1.0")
+local LMP = LibStub("LibMediaProvider-1.0")
 local LMM = LibStub("LibMainMenu")
+local LCT = LibStub("LibCustomTitles",true)
 local MENU_CATEGORY_PCHAT = nil
 
 -- Return true/false if text is a flood
@@ -911,18 +937,22 @@ local function RedockTextEntry()
 end
 
 
+
+
+-- Also called by bindings
+function pChat_ShowAutoMsg()
+	LMM:ToggleCategory(MENU_CATEGORY_PCHAT)
+end
 -- For console
 function pChat.CMD_DEBUG()
 	if pChat.DEBUG ~= 1 then
 		d("pChat Debug : On")
-		pChat.DEBUG = 1
 	else
 		d("pChat Debug : Off")
 		pChat.DEBUG = 0
 	end
 end
 
--- For console quest time
 function pChat.CMD_DEBUG1()
 	if pChat.DEBUG ~= 2 then
 		d("pChat Debug 2: On")
@@ -943,12 +973,38 @@ function pChat.CMD_DEBUG2()
 	end
 end
 
-
--- Also called by bindings
-function pChat_ShowAutoMsg()
-	LMM:ToggleCategory(MENU_CATEGORY_PCHAT)
+--Handled by keybind
+function pChat_ToggleChat()
+	
+	if CHAT_SYSTEM:IsMinimized() then
+		CHAT_SYSTEM:Maximize()
+	else
+		CHAT_SYSTEM:Minimize()
+	end
+	
 end
 
+-- Called by bindings
+function pChat_WhispMyTarget()
+	if targetToWhisp then
+		CHAT_SYSTEM:StartTextEntry(nil, CHAT_CHANNEL_WHISPER, targetToWhisp)
+	end
+end
+
+-- For compatibility. Called by others addons.
+function pChat.formatSysMessage(statusMessage)
+	return FormatSysMessage(statusMessage)
+end
+
+-- For compatibility. Called by others addons.
+function pChat_FormatSysMessage(statusMessage)
+	return FormatSysMessage(statusMessage)
+end
+
+-- For compatibility. Called by others addons.
+function pChat_GetChannelColors(channel, from)
+	return GetChannelColors(channel, from)
+end
 -- Register Slash commands
 SLASH_COMMANDS["/msg"] = pChat_ShowAutoMsg
 SLASH_COMMANDS["/pchat_debug"] = pChat.CMD_DEBUG
@@ -1406,7 +1462,129 @@ function pChat_BuildAutomatedMessagesDialog(control)
 	})
 
 end
+-- **************************************************************************
+-- Chat Tab Related Functions
+-- **************************************************************************
+--
+-- Definitions of overall chat functions
+--
+-- ====Remember Last Used Chat Channel===================
+-- Global to enable : db.enableChatTabChannel
+-- Stored Channels  : db.chatTabChannel[tabIndex]
+-- ------------------------------------------------------
+-- Used to rememmber the last channel used in a tab, except for whisper.  Handled in the preHook
 
+-- ====Default Channel Per Tab ==========================
+-- Global to enable : db.enableChatTabDefault
+-- Stored Channels  : db.defaultTabChannel[chatTabNumber]
+-- ------------------------------------------------------
+-- Sets the tab to default, on initial load it defaults all selected tabs to default no matter what is remembered.
+-- However, once chnaged by using another channel in a tab it will stay that way until reloadui or changed manually.
+-- Example Tab1 set to Zone, you do a message to /say, even though Tab1 should be Zone, it will now be /say until reloadui
+-- then will go back to Zone
+
+-- ====Default Chat Tab Lock=============================
+-- Global to enable : db.defaultChatTabChannelLock = {}
+-- Stored Channels  : db.defaultTabChannel[chatTabNumber]
+-- ------------------------------------------------------
+-- The enable above defines that the default tab selected is where the tab will be locked to.  So if the user selects a tab
+-- to be default locked, then they can send a message to any channel, but after the message is sent the tab reverts back to 
+-- the default.  For example, tab1 is set to Zone, you send a chat to /say, once chat goes, then tab1 reverts back to zone for
+-- next and subsequent chats.  This uses the same variable as Default for the channel stored per tab.
+
+
+-- Function chkFCOCTB dectects presence of the FCO Chat Tab Brain addon by Beartram
+local function chkFCOCTB ()
+	local booFCOCTB = false
+	if FCOCTB then booFCOCTB = true else booFCOCTB = false end
+	return booFCOCTB
+end
+-- Function SetToDefaultChannel -- Sets default channel, stored in db.defaultTabChannel
+-- * will check to see if defaults are enable, and set accordingly - should only run once per reloadui session
+local function SetToDefaultChannel()
+	--if db.defaultchannel ~= PCHAT_CHANNEL_NONE then
+	--	CHAT_SYSTEM:SetChannel(db.defaultchannel)
+	--end
+	if db.enableChatTabDefault == true then
+		local totalTabs = CHAT_SYSTEM.tabPool.m_Active
+		for i = 1, #totalTabs do
+			if db.defaultTabChannel[i] ~= PCHAT_CHANNEL_NONE then
+				CHAT_SYSTEM:SetChannel(db.defaultTabChannel[i])
+				--d(db.defaultTabChannel[i].."  i "..i)
+				if db.enableChatTabChannel == true then
+					db.chatTabChannel[i].channel = db.defaultTabChannel[i]
+				end
+			end
+		end
+	end		
+end
+
+local function getTabNames()
+    local totalTabs = CHAT_SYSTEM.tabPool.m_Active
+    if totalTabs ~= nil and #totalTabs >= 1 then
+        tabNames = {}
+        for idx, tmpTab in pairs(totalTabs) do
+            local tabLabel = tmpTab:GetNamedChild("Text")
+            local tmpTabName = tabLabel:GetText()
+            if tmpTabName ~= nil and tmpTabName ~= "" then
+                tabNames[idx] = tmpTabName
+            end
+        end
+    end
+end
+
+local function getTabIdx (tabName)
+	local tabIdx = 0
+	local totalTabs = CHAT_SYSTEM.tabPool.m_Active
+	for i = 1, #totalTabs do
+		if tabNames[i] == tabName then
+			tabIdx = i
+		end
+	end
+	return tabIdx
+end
+
+local function getActiveTabIdx()
+    local activeTab = CHAT_SYSTEM.primaryContainer.currentBuffer:GetParent().tab
+    local activeTabIdx = activeTab.index
+	return activeTabIdx
+end
+
+local function getActiveChannel()
+    local activeChannel = 0
+    if CHAT_SYSTEM and CHAT_SYSTEM.currentChannel then
+        activeChannel = CHAT_SYSTEM.currentChannel
+    end
+    return activeChannel
+end
+-- **************************************************************************
+-- Other Functions
+-- **************************************************************************
+-- Function GetGuildNames get names of guilds used in Addon Menu and potentially other guild related functions.
+local function GetGuildNames()
+	local maxGuild = GetNumGuilds()
+	nameOfGuild = {}
+	nameOfGuildOfficer = {}
+	for guild = 1, 5 do
+		if guild > maxGuild then
+			nameOfGuild[guild] = GetString(PCHAT_GUILD).." "..guild
+			nameOfGuildOfficer[guild] = GetString(PCHAT_GUILD).." "..GetString(PCHAT_OFFICER).." "..guild
+		else
+			-- Guildname
+			local guildId = GetGuildId(guild)
+			nameOfGuild[guild] = GetGuildName(guildId)
+			nameOfGuildOfficer[guild] = GetGuildName(guildId).." "..GetString(PCHAT_OFFICER)
+			-- Occurs sometimes
+			if(not nameOfGuild[guild] or (nameOfGuild[guild]):len() < 1) then
+				nameOfGuild[guild] = GetString(PCHAT_GUILD).." "..guildId
+			end
+			if(not nameOfGuildOfficer[guild] or (nameOfGuildOfficer[guild]):len() < 1) then
+				nameOfGuildOfficer[guild] = GetString(PCHAT_GUILD).." "..guildId.." "..GetString(PCHAT_OFFICER)
+			end
+			
+		end
+	end
+end
 -- Rewrite of a core function
 function CHAT_SYSTEM.textEntry:AddCommandHistory(text)
 	
@@ -2327,7 +2505,7 @@ end
 function CHAT_SYSTEM:UpdateTextEntryChannel()
 	
 	local channelData = self.channelData[self.currentChannel]
-	
+	CHAT_SYSTEM:Zo_AddMessage("here??")
 	if channelData then
 		self.textEntry:SetChannel(channelData, self.currentTarget)
 		
@@ -2744,7 +2922,7 @@ local function ReformatSysMessages(text)
 			findC = string.find(rawSys, "|[cC]%x%x%x%x%x%x")
 			findR = string.find(rawSys, "|[rR]")
 			
-			while findR ~= nil do
+			while findR ~= nil and findC ~= nil do
 				
 				if findC then
 					if findR < findC then
@@ -2759,6 +2937,12 @@ local function ReformatSysMessages(text)
 			
 		end
 		
+	end
+	-- Added |u search
+	startColSys, endColSys = string.find(rawSys, "|u%-?%d+%%?:%-?%d+%%?:.-:|u",1)
+	-- if found
+	if startColSys then
+		rawSys = string.gsub(rawSys,"|u%-?%d+%%?:%-?%d+%%?:.-:|u","")
 	end
 	
 	return rawSys
@@ -3640,6 +3824,8 @@ function CHAT_SYSTEM:AddMessage(text)
 	else
 		table.insert(pChatData.cachedMessages, text)
 	end
+	-- insert default locked message code here??
+	
 	
 end
 
@@ -4412,11 +4598,7 @@ local function AutoSyncSettingsForNewPlayer()
 end
 
 -- Set channel to the default one
-local function SetToDefaultChannel()
-	if db.defaultchannel ~= PCHAT_CHANNEL_NONE then
-		CHAT_SYSTEM:SetChannel(db.defaultchannel)
-	end
-end
+
 
 local function SaveGuildIndexes()
 
@@ -4545,98 +4727,10 @@ local function UpdateCharCorrespondanceTableSwitchs()
 
 end
 
--- Registers the formatMessage function with the libChat to handle chat formatting.
--- Unregisters itself from the player activation event with the event manager.
-local function OnPlayerActivated()
-	
-	pChatData.sceneFirst = false
-	
-	if isAddonLoaded then
-		
-		pChatData.activeTab = 1
-		
-		ZO_PreHook(CHAT_SYSTEM.primaryContainer, "HandleTabClick", function(self, tab) 
-			pChatData.activeTab = tab.index
-		end)
-		
-		-- Visual Notification PreHook
-		ZO_PreHook(CHAT_SYSTEM, "Maximize", function(self) 
-			CHAT_SYSTEM.IMLabelMin:SetHidden(true)			
-		end)
-		
-		--local fontPath = ZoFontChat:GetFontInfo()
-		--CHAT_SYSTEM:AddMessage(fontPath)
-		--CHAT_SYSTEM:AddMessage("|C3AF24BLorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur.|r")
-		--CHAT_SYSTEM:AddMessage("Characters below should be well displayed :")
-		--CHAT_SYSTEM:AddMessage("!\"#$%&'()*+,-./0123456789:;<=>?@ ABCDEFGHIJKLMNOPQRSTUVWXYZ [\]^_`abcdefghijklmnopqrstuvwxyz{|} ~¡£¤¥¦§©«-®°²³´µ¶·»½¿ ÀÁÂÄÆÇÈÉÊËÌÍÎÏÑÒÓÔÖ×ÙÚÛÜßàáâäæçèéêëìíîïñòóôöùúûüÿŸŒœ")
-		
-		-- AntiSpam
-		pChatData.spamLookingForEnabled = true
-		pChatData.spamWantToEnabled = true
-		pChatData.spamGuildRecruitEnabled = true
-		
-		-- Show 1000 lines instead of 200 & Change fade delay
-		ShowFadedLines()
-		CreateNewChatTabPostHook()
-		
-		-- Should we minimize ?
-		MinimizeChatAtLaunch()
-		
-		-- Message for new chars
-		AutoSyncSettingsForNewPlayer()
-		
-		-- Chat Config synchronization
-		SyncChatConfig(db.chatSyncConfig, "lastChar")
-		SaveChatConfig()
-		
-		-- Tags next to entry box
-		UpdateCharCorrespondanceTableChannelNames()
-		
-		-- Update Swtches
-		UpdateCharCorrespondanceTableSwitchs()
-		CHAT_SYSTEM:CreateChannelData()
-		
-		-- Set default channel at login
-		SetToDefaultChannel()
-		
-		-- Save all category colors
-		SaveGuildIndexes()
-		
-		-- Handle Copy text
-		CopyToTextEntryText()
-		
-		-- Restore History if needed
-		RestoreChatHistory()
-		-- Default Tab
-		SetDefaultTab(db.defaultTab)
-		-- Change Window apparence
-		ChangeChatWindowDarkness()
-		
-		-- libChat
-		-- registerFormat = message for EVENT_CHAT_MESSAGE_CHANNEL
-		-- registerFriendStatus = message for EVENT_FRIEND_PLAYER_STATUS_CHANGED
-		-- registerIgnoreAdd = message for EVENT_IGNORE_ADDED, registerIgnoreRemove = message for EVENT_IGNORE_REMOVED
-		-- registerGroupTypeChanged = message for EVENT_GROUP_TYPE_CHANGED
-		-- All those events outputs to the ChatSystem
-		PCHATLC:registerFormat(FormatMessage, ADDON_NAME)
-		
-		if not PCHATLC.manager.registerFriendStatus then
-			PCHATLC:registerFriendStatus(OnFriendPlayerStatusChanged, ADDON_NAME)
-		end
-		
-		PCHATLC:registerIgnoreAdd(OnIgnoreAdded, ADDON_NAME)
-		PCHATLC:registerIgnoreRemove(OnIgnoreRemoved, ADDON_NAME)
-		PCHATLC:registerGroupMemberLeft(OnGroupMemberLeft, ADDON_NAME)
-		PCHATLC:registerGroupTypeChanged(OnGroupTypeChanged, ADDON_NAME)
-		
-		isAddonInitialized = true
-		
-		EVENT_MANAGER:UnregisterForEvent(ADDON_NAME, EVENT_PLAYER_ACTIVATED)
-		
-	end
-	
-end
-
+-- *********************************************************************************
+-- * Section: LAM Outside Functions : used in LAM but function resides outside LAM
+-- *********************************************************************************
+-- Character Sync
 local function SyncCharacterSelectChoices()
 	-- Sync Character Select
 	pChatData.chatConfSyncChoices = {}
@@ -4651,8 +4745,11 @@ local function SyncCharacterSelectChoices()
 	end
 end
 
+
+-- *********************************************************************************
+-- * Section: Settings Start (LAM)
+-- *********************************************************************************
 -- Build LAM Option Table, used when AddonLoads or when a player join/leave a guild
---**Settings Start
 local function BuildLAMPanel()
 
 	-- Used to reset colors to default value, lam need a formatted array
@@ -4686,14 +4783,20 @@ local function BuildLAMPanel()
 		table.insert(arrayTab, 1)
 	end
 	
+	getTabNames()
 
 	local optionsData = {}
 
-	
+	-- Messages Settings
 	optionsData[#optionsData + 1] = {
 		type = "submenu",
 		name = GetString(PCHAT_OPTIONSH),
 		controls = {
+            {
+                type = "description",
+                text = GetString(PCHAT_SETTINGS_MESSAGE_SETTINGS_DESC),
+                width = "full",
+            },
 			{-- LAM Option Show Guild Numbers
 				type = "checkbox",
 				name = GetString(PCHAT_GUILDNUMBERS),
@@ -4833,72 +4936,6 @@ local function BuildLAMPanel()
 					
 				end,
 			},
-			{-- TODO : optimize
-				type = "dropdown",
-				name = GetString(PCHAT_DEFAULTCHANNEL),
-				tooltip = GetString(PCHAT_DEFAULTCHANNELTT),
-				choices = {
-					GetString("PCHAT_DEFAULTCHANNELCHOICE", PCHAT_CHANNEL_NONE),
-					GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_ZONE),
-					GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_SAY),
-					GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_GUILD_1),
-					GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_GUILD_2),
-					GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_GUILD_3),
-					GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_GUILD_4),
-					GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_GUILD_5),
-					GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_OFFICER_1),
-					GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_OFFICER_2),
-					GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_OFFICER_3),
-					GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_OFFICER_4),
-					GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_OFFICER_5)
-				},
-				width = "full",
-				default = defaults.defaultchannel,
-				getFunc = function() return GetString("PCHAT_DEFAULTCHANNELCHOICE", db.defaultchannel) end,
-				setFunc = function(choice)
-					if choice == GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_ZONE) then
-						db.defaultchannel = CHAT_CHANNEL_ZONE
-					elseif choice == GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_SAY) then
-						db.defaultchannel = CHAT_CHANNEL_SAY
-					elseif choice == GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_GUILD_1) then
-						db.defaultchannel = CHAT_CHANNEL_GUILD_1
-					elseif choice == GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_GUILD_2) then
-						db.defaultchannel = CHAT_CHANNEL_GUILD_2
-					elseif choice == GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_GUILD_3) then
-						db.defaultchannel = CHAT_CHANNEL_GUILD_3
-					elseif choice == GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_GUILD_4) then
-						db.defaultchannel = CHAT_CHANNEL_GUILD_4
-					elseif choice == GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_GUILD_5) then
-						db.defaultchannel = CHAT_CHANNEL_GUILD_5
-					elseif choice == GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_OFFICER_1) then
-						db.defaultchannel = CHAT_CHANNEL_OFFICER_1
-					elseif choice == GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_OFFICER_2) then
-						db.defaultchannel = CHAT_CHANNEL_OFFICER_2
-					elseif choice == GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_OFFICER_3) then
-						db.defaultchannel = CHAT_CHANNEL_OFFICER_3
-					elseif choice == GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_OFFICER_4) then
-						db.defaultchannel = CHAT_CHANNEL_OFFICER_4
-					elseif choice == GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_OFFICER_5) then
-						db.defaultchannel = CHAT_CHANNEL_OFFICER_5
-					elseif choice == GetString("PCHAT_DEFAULTCHANNELCHOICE", PCHAT_CHANNEL_NONE) then
-						db.defaultchannel = PCHAT_CHANNEL_NONE
-					else
-						-- When user click on LAM reinit button
-						db.defaultchannel = defaults.defaultchannel
-					end
-					
-				end,
-			},
-			{-- CHAT_SYSTEM.primaryContainer.windows doesn't exists yet at OnAddonLoaded. So using the pChat reference.
-				type = "dropdown",
-				name = GetString(PCHAT_DEFAULTTAB),
-				tooltip = GetString(PCHAT_DEFAULTTABTT),
-				choices = arrayTab,
-				width = "full",
-				default = defaults.defaultTab,
-				getFunc = function() return db.defaultTab end,
-				setFunc = function(choice) db.defaultTab = choice end,
-			},
 			{-- Disable Brackets
 				type = "checkbox",
 				name = GetString(PCHAT_DISABLEBRACKETS),
@@ -4936,11 +4973,172 @@ local function BuildLAMPanel()
 				default = defaults.enablecopy,
 			},--
 		},
+	} -- Chat Tabs
+	optionsData[#optionsData + 1] = {
+		type = "submenu",
+		name = GetString(PCHAT_CHATTABH),
+		controls = {
+            {
+                type = "description",
+                text = GetString(PCHAT_SETTINGS_CHAT_TAB_DESC),
+                width = "full",
+            },
+			--[[{-- Use pChat with/override FCOCTB
+				type = "checkbox",
+				name = GetString(PCHAT_enablePChatTab),
+				tooltip = GetString(PCHAT_enablePChatTabT),
+				getFunc = function() return db.enableChatTabChannel end,
+				setFunc = function(newValue) db.enableChatTabChannel = newValue end,
+				width = "full",
+				default = defaults.enableChatTabChannel,
+				disabled = function() return not chkFCOCTB() end,
+			},]]
+			{-- Enable chat channel memory
+				type = "checkbox",
+				name = GetString(PCHAT_enableChatTabChannel),
+				tooltip = GetString(PCHAT_enableChatTabChannelT),
+				getFunc = function() return db.enableChatTabChannel end,
+				setFunc = function(newValue) db.enableChatTabChannel = newValue end,
+				width = "full",
+				default = defaults.enableChatTabChannel,
+			},
+			{-- Enable chat channel per tab memory
+				type = "checkbox",
+				name = GetString(PCHAT_enableChatTabDefault),
+				tooltip = GetString(PCHAT_enableChatTabDefault),
+				getFunc = function() return db.enableChatTabDefault end,
+				setFunc = function(newValue) db.enableChatTabDefault = newValue end,
+				width = "full",
+				default = defaults.enableChatTabDefault,
+			},
+			{-- TODO : optimize
+				type = "dropdown",
+				name = GetString(PCHAT_DEFAULTCHANNEL),
+				tooltip = GetString(PCHAT_DEFAULTCHANNELTT),
+				--choices = chatTabNames,
+				choices = {
+					GetString("PCHAT_DEFAULTCHANNELCHOICE", PCHAT_CHANNEL_NONE),
+					GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_ZONE),
+					GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_PARTY),
+					GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_SAY),
+					GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_YELL),
+					GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_EMOTE),
+					GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_GUILD_1),
+					GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_GUILD_2),
+					GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_GUILD_3),
+					GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_GUILD_4),
+					GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_GUILD_5),
+					GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_OFFICER_1),
+					GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_OFFICER_2),
+					GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_OFFICER_3),
+					GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_OFFICER_4),
+					GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_OFFICER_5),
+					GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_ZONE_LANGUAGE_1),
+					GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_ZONE_LANGUAGE_2),
+					GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_ZONE_LANGUAGE_3),
+					GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_ZONE_LANGUAGE_4),
+				},
+				width = "full",
+				default = defaults.defaultchannel,
+				getFunc = function() return GetString("PCHAT_DEFAULTCHANNELCHOICE", db.defaultchannel) end,
+				setFunc = function(choice)
+					if choice == GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_ZONE) then
+						db.defaultchannel = CHAT_CHANNEL_ZONE
+					elseif choice == GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_PARTY) then
+						db.defaultchannel = CHAT_CHANNEL_PARTY
+					elseif choice == GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_SAY) then
+						db.defaultchannel = CHAT_CHANNEL_SAY
+					elseif choice == GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_YELL) then
+						db.defaultchannel = CHAT_CHANNEL_YELL
+					elseif choice == GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_EMOTE) then
+						db.defaultchannel = CHAT_CHANNEL_EMOTE
+					elseif choice == GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_GUILD_1) then
+						db.defaultchannel = CHAT_CHANNEL_GUILD_1
+					elseif choice == GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_GUILD_2) then
+						db.defaultchannel = CHAT_CHANNEL_GUILD_2
+					elseif choice == GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_GUILD_3) then
+						db.defaultchannel = CHAT_CHANNEL_GUILD_3
+					elseif choice == GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_GUILD_4) then
+						db.defaultchannel = CHAT_CHANNEL_GUILD_4
+					elseif choice == GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_GUILD_5) then
+						db.defaultchannel = CHAT_CHANNEL_GUILD_5
+					elseif choice == GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_OFFICER_1) then
+						db.defaultchannel = CHAT_CHANNEL_OFFICER_1
+					elseif choice == GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_OFFICER_2) then
+						db.defaultchannel = CHAT_CHANNEL_OFFICER_2
+					elseif choice == GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_OFFICER_3) then
+						db.defaultchannel = CHAT_CHANNEL_OFFICER_3
+					elseif choice == GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_OFFICER_4) then
+						db.defaultchannel = CHAT_CHANNEL_OFFICER_4
+					elseif choice == GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_OFFICER_5) then
+						db.defaultchannel = CHAT_CHANNEL_OFFICER_5
+					elseif choice == GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_ZONE_LANGUAGE_1) then
+						db.defaultchannel = CHAT_CHANNEL_ZONE_LANGUAGE_1
+					elseif choice == GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_ZONE_LANGUAGE_2) then
+						db.defaultchannel = CHAT_CHANNEL_ZONE_LANGUAGE_2
+					elseif choice == GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_ZONE_LANGUAGE_3) then
+						db.defaultchannel = CHAT_CHANNEL_ZONE_LANGUAGE_3
+					elseif choice == GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_ZONE_LANGUAGE_4) then
+						db.defaultchannel = CHAT_CHANNEL_ZONE_LANGUAGE_4
+					elseif choice == GetString("PCHAT_DEFAULTCHANNELCHOICE", PCHAT_CHANNEL_NONE) then
+						db.defaultchannel = PCHAT_CHANNEL_NONE
+					
+					else
+						-- When user click on LAM reinit button
+						db.defaultchannel = defaults.defaultchannel
+					end
+					
+				end,
+			},
+			{-- CHAT_SYSTEM.primaryContainer.windows doesn't exists yet at OnAddonLoaded. So using the pChat reference.
+				type = "dropdown",
+				name = GetString(PCHAT_DEFAULTTAB),
+				tooltip = GetString(PCHAT_DEFAULTTABTT),
+				choices = tabNames,
+				width = "full",
+				getFunc = function() return db.defaultTabName end,
+				setFunc = 	function(choice) 
+								db.defaultTabName = choice
+								--d(choice)
+								--d(db.defaultTabName)
+								db.defaultTab = getTabIdx(choice)
+								--d(db.defaultTab)
+							end,
+			},
+			--[[{-- CHAT_SYSTEM.primaryContainer.windows doesn't exists yet at OnAddonLoaded. So using the pChat reference.
+				type = "button",
+				name = "test",
+				tooltip = GetString(PCHAT_DEFAULTTABTT),
+				width = "full",
+				func = function() local tabIndex = 1
+									-- CHAT_SYSTEM
+									--chatContainer
+									local container = CHAT_OPTIONS:GetCurrentContainer()
+									d("container "..container)
+									CHAT_OPTIONS:Show(container,tabIndex) end,
+									
+			},]]--
+			--[[{-- Enable whisper redirect
+				type = "checkbox",
+				name = GetString(PCHAT_enableWhisperTab),
+				tooltip = GetString(PCHAT_enableWhisperTabT),
+				getFunc = function() return db.enableWhisperTab end,
+				setFunc = function(newValue) db.enableWhisperTab = newValue end,
+				width = "full",
+				default = defaults.enableWhisperTab,
+			},]]--
+			-- !!!!!need code for specific tab here
+		},
 	} -- Group Submenu
 	optionsData[#optionsData + 1] = {
 		type = "submenu",
 		name = GetString(PCHAT_GROUPH),
 		controls = {
+            {
+                type = "description",
+                text = GetString(PCHAT_SETTINGS_PARTY_CHANNEL_TWEAKS),
+                width = "full",
+            },
 			{-- Enable Party Switch
 				type = "checkbox",
 				name = GetString(PCHAT_ENABLEPARTYSWITCH),
@@ -4949,6 +5147,21 @@ local function BuildLAMPanel()
 				setFunc = function(newValue) db.enablepartyswitch = newValue end,
 				width = "full",
 				default = defaults.enablepartyswitch,
+			},
+			{-- CHAT_SYSTEM.primaryContainer.windows doesn't exists yet at OnAddonLoaded. So using the pChat reference.
+				type = "dropdown",
+				name = GetString(PCHAT_PARTYTAB),
+				tooltip = GetString(PCHAT_PARTYTABTT),
+				choices = tabNames,
+				width = "full",
+				getFunc = function() return db.partyTabName end,
+				setFunc = 	function(choice) 
+								db.partyTabName = choice
+								--d(choice)
+								--d(db.defaultTabName)
+								db.partyTab = getTabIdx(choice)
+								--d(db.defaultTab)
+							end,
 			},
 			{-- Group Leader
 				type = "checkbox",
@@ -5013,6 +5226,11 @@ local function BuildLAMPanel()
 		type = "submenu",
 		name = GetString(PCHAT_SYNCH),
 		controls = {
+            {
+                type = "description",
+                text = GetString(PCHAT_SETTINGS_SYNC_DESC),
+                width = "full",
+            },
 			{-- Sync ON
 				type = "checkbox",
 				name = GetString(PCHAT_CHATSYNCCONFIG),
@@ -5039,6 +5257,11 @@ local function BuildLAMPanel()
 		type = "submenu",
 		name = GetString(PCHAT_APPARENCEMH),
 		controls = {
+            {
+                type = "description",
+                text = GetString(PCHAT_SETTINGS_APPARENCEMH_DESC),
+                width = "full",
+            },
 			{--	New Message Color
 				type = "colorpicker",
 				name = GetString(PCHAT_TABWARNING),
@@ -5111,6 +5334,11 @@ local function BuildLAMPanel()
 		type = "submenu",
 		name = GetString(PCHAT_IMH),
 		controls = {
+            {
+                type = "description",
+                text = GetString(PCHAT_SETTINGS_IM_DESC),
+                width = "full",
+            },
 			{-- LAM Option Whispers: Sound
 				type = "dropdown",
 				name = GetString(PCHAT_SOUNDFORINCWHISPS),
@@ -5171,6 +5399,11 @@ local function BuildLAMPanel()
 		type = "submenu",
 		name = GetString(PCHAT_RESTORECHATH),
 		controls = {
+            {
+                type = "description",
+                text = GetString(PCHAT_SETTINGS_RESTORECHAT_DESC),
+                width = "full",
+            },
 			{-- LAM Option Restore: After ReloadUI
 				type = "checkbox",
 				name = GetString(PCHAT_RESTOREONRELOADUI),
@@ -5740,8 +5973,282 @@ local function BuildLAMPanel()
 			},
 		},
 	}
--- Guilds
-	
+-- Chat Tab Stuff
+--********dd********************************												
+	local maxTabs = CHAT_SYSTEM.tabPool.m_Active
+	-- Check if lam was rebuilt in ONPlayerActivated - Tab info not available until then
+	-- LAM is built twice on addonload and playeractivated
+	if isLAMRebuilt == true then
+		GetGuildNames()
+		local chatTabNumber = 1
+		for chatTabNumber = 1, #maxTabs do
+			optionsData[#optionsData + 1] = {
+			type = "submenu",
+			name = GetString(PCHAT_CHAT_TAB_CHANNELS)..": "..tabNames[chatTabNumber],
+			controls = {
+					
+				{-- TODO : optimize
+					type = "dropdown",
+					name = GetString(PCHAT_CHAT_TAB_DEFAULT_CHANNEL),
+					tooltip = GetString(PCHAT_CHAT_TAB_DEFAULT_CHANNEL_TT),
+					--choices = chatTabNames,
+					choices = 	{
+								GetString("PCHAT_DEFAULTCHANNELCHOICE", PCHAT_CHANNEL_NONE),
+								GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_ZONE),
+								GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_PARTY),
+								GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_SAY),
+								GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_YELL),
+								GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_EMOTE),
+								GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_GUILD_1),
+								GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_GUILD_2),
+								GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_GUILD_3),
+								GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_GUILD_4),
+								GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_GUILD_5),
+								GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_OFFICER_1),
+								GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_OFFICER_2),
+								GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_OFFICER_3),
+								GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_OFFICER_4),
+								GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_OFFICER_5),
+								GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_ZONE_LANGUAGE_1),
+								GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_ZONE_LANGUAGE_2),
+								GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_ZONE_LANGUAGE_3),
+								GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_ZONE_LANGUAGE_4),
+								},
+					width = "full",
+					default = PCHAT_CHANNEL_NONE,
+					getFunc = 	function() 
+									if db.defaultTabChannel[chatTabNumber] == nil then db.defaultTabChannel[chatTabNumber] = PCHAT_CHANNEL_NONE end 
+									return GetString("PCHAT_DEFAULTCHANNELCHOICE", db.defaultTabChannel[chatTabNumber]) 
+								end,
+					setFunc = 	function(choice)
+									if choice == GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_ZONE) then
+									db.defaultTabChannel[chatTabNumber] = CHAT_CHANNEL_ZONE
+									elseif choice == GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_PARTY) then
+										db.defaultTabChannel[chatTabNumber] = CHAT_CHANNEL_PARTY
+									elseif choice == GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_SAY) then
+										db.defaultTabChannel[chatTabNumber] = CHAT_CHANNEL_SAY
+									elseif choice == GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_YELL) then
+										db.defaultTabChannel[chatTabNumber] = CHAT_CHANNEL_YELL
+									elseif choice == GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_EMOTE) then
+										db.defaultTabChannel[chatTabNumber] = CHAT_CHANNEL_EMOTE
+									elseif choice == GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_GUILD_1) then
+										db.defaultTabChannel[chatTabNumber] = CHAT_CHANNEL_GUILD_1
+									elseif choice == GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_GUILD_2) then
+										db.defaultTabChannel[chatTabNumber] = CHAT_CHANNEL_GUILD_2
+									elseif choice == GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_GUILD_3) then
+										db.defaultTabChannel[chatTabNumber] = CHAT_CHANNEL_GUILD_3
+									elseif choice == GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_GUILD_4) then
+										db.defaultTabChannel[chatTabNumber] = CHAT_CHANNEL_GUILD_4
+									elseif choice == GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_GUILD_5) then
+										db.defaultTabChannel[chatTabNumber] = CHAT_CHANNEL_GUILD_5
+									elseif choice == GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_OFFICER_1) then
+										db.defaultTabChannel[chatTabNumber] = CHAT_CHANNEL_OFFICER_1
+									elseif choice == GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_OFFICER_2) then
+										db.defaultTabChannel[chatTabNumber] = CHAT_CHANNEL_OFFICER_2
+									elseif choice == GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_OFFICER_3) then
+										db.defaultTabChannel[chatTabNumber] = CHAT_CHANNEL_OFFICER_3
+									elseif choice == GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_OFFICER_4) then
+										db.defaultTabChannel[chatTabNumber] = CHAT_CHANNEL_OFFICER_4
+									elseif choice == GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_OFFICER_5) then
+										db.defaultTabChannel[chatTabNumber] = CHAT_CHANNEL_OFFICER_5
+									elseif choice == GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_ZONE_LANGUAGE_1) then
+										db.defaultTabChannel[chatTabNumber] = CHAT_CHANNEL_ZONE_LANGUAGE_1
+									elseif choice == GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_ZONE_LANGUAGE_2) then
+										db.defaultTabChannel[chatTabNumber] = CHAT_CHANNEL_ZONE_LANGUAGE_2
+									elseif choice == GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_ZONE_LANGUAGE_3) then
+										db.defaultTabChannel[chatTabNumber] = CHAT_CHANNEL_ZONE_LANGUAGE_3
+									elseif choice == GetString("PCHAT_DEFAULTCHANNELCHOICE", CHAT_CHANNEL_ZONE_LANGUAGE_4) then
+										db.defaultTabChannel[chatTabNumber] = CHAT_CHANNEL_ZONE_LANGUAGE_4
+									elseif choice == GetString("PCHAT_DEFAULTCHANNELCHOICE", PCHAT_CHANNEL_NONE) then
+										db.defaultTabChannel[chatTabNumber] = PCHAT_CHANNEL_NONE
+									
+									else
+										-- When user click on LAM reinit button
+										db.defaultTabChannel[chatTabNumber] = defaults.defaultchannel
+									end
+								end,
+					disabled = function() return not db.enableChatTabDefault end
+				},
+				--[[{
+					type = "checkbox",
+					name = GetString(PCHAT_CHAT_LOCK_DEFAULT),
+					tooltip =  GetString(PCHAT_CHAT_LOCK_DEFAULT_TT),
+					getFunc = 	function() 
+									if db.defaultChatTabChannelLock[chatTabNumber] == nil then db.defaultChatTabChannelLock[chatTabNumber] = false end 
+									return db.defaultChatTabChannelLock[chatTabNumber]
+								end,
+					setFunc = function(newValue) db.defaultChatTabChannelLock[chatTabNumber] = newValue end,
+					width = "full",
+					disabled = function() return not db.enableChatTabDefault end
+				},]]
+				{
+					type = "checkbox",
+					name = GetString(PCHAT_CHAT_CHANNEL_SAY),
+					tooltip = "Say",
+					getFunc = function() return IsChatContainerTabCategoryEnabled(1,chatTabNumber,CHAT_CATEGORY_SAY) end,
+					setFunc = function(newValue) SetChatContainerTabCategoryEnabled(1,chatTabNumber,CHAT_CATEGORY_SAY,newValue)end,
+					width = "full",
+				},
+				{
+					type = "checkbox",
+					name = GetString(PCHAT_CHAT_CHANNEL_YELL),
+					getFunc = function() return IsChatContainerTabCategoryEnabled(1,chatTabNumber,CHAT_CATEGORY_YELL) end,
+					setFunc = function(newValue) SetChatContainerTabCategoryEnabled(1,chatTabNumber,CHAT_CATEGORY_YELL,newValue)end,
+					width = "full",
+				},
+				{
+					type = "checkbox",
+					name = GetString(PCHAT_CHAT_CHANNEL_WHISPER),
+					getFunc = function() return IsChatContainerTabCategoryEnabled(1,chatTabNumber,CHAT_CATEGORY_WHISPER_INCOMING) end,
+					setFunc = function(newValue) 
+						SetChatContainerTabCategoryEnabled(1,chatTabNumber,CHAT_CATEGORY_WHISPER_INCOMING,newValue)
+						SetChatContainerTabCategoryEnabled(1,chatTabNumber,CHAT_CATEGORY_WHISPER_OUTGOING,newValue)
+						end,
+					width = "full",
+				},
+				{
+					type = "checkbox",
+					name = GetString(PCHAT_CHAT_CHANNEL_PARTY),
+					getFunc = function() return IsChatContainerTabCategoryEnabled(1,chatTabNumber,CHAT_CATEGORY_PARTY) end,
+					setFunc = function(newValue) SetChatContainerTabCategoryEnabled(1,chatTabNumber,CHAT_CATEGORY_PARTY,newValue) end,
+					width = "full",
+				},
+				{
+					type = "checkbox",
+					name = GetString(PCHAT_CHAT_CHANNEL_EMOTE),
+					getFunc = function() return IsChatContainerTabCategoryEnabled(1,chatTabNumber,CHAT_CATEGORY_EMOTE) end,
+					setFunc = function(newValue) SetChatContainerTabCategoryEnabled(1,chatTabNumber,CHAT_CATEGORY_EMOTE,newValue) end,
+					width = "full",
+				},
+				{
+					type = "checkbox",
+					name = GetString(PCHAT_CHAT_CHANNEL_MONSTER),
+					getFunc = function() return IsChatContainerTabCategoryEnabled(1,chatTabNumber,CHAT_CATEGORY_MONSTER_SAY) end,
+					setFunc = function(newValue)
+							SetChatContainerTabCategoryEnabled(1,chatTabNumber,CHAT_CATEGORY_MONSTER_SAY,newValue)
+							SetChatContainerTabCategoryEnabled(1,chatTabNumber,CHAT_CATEGORY_MONSTER_YELL,newValue)
+							SetChatContainerTabCategoryEnabled(1,chatTabNumber,CHAT_CATEGORY_MONSTER_WHISPER,newValue)
+							SetChatContainerTabCategoryEnabled(1,chatTabNumber,CHAT_CATEGORY_MONSTER_EMOTE,newValue)
+							end,
+					width = "full",
+				},
+				{
+					type = "checkbox",
+					name = GetString(PCHAT_CHAT_CHANNEL_SYSTEM),
+					getFunc = function() return IsChatContainerTabCategoryEnabled(1,chatTabNumber,CHAT_CATEGORY_SYSTEM) end,
+					setFunc = function(newValue) SetChatContainerTabCategoryEnabled(1,chatTabNumber,CHAT_CATEGORY_SYSTEM,newValue) end,
+					width = "full",
+				},
+				{
+					type = "checkbox",
+					name = GetString(PCHAT_CHAT_CHANNEL_ZONE),
+					getFunc = function() return IsChatContainerTabCategoryEnabled(1,chatTabNumber,CHAT_CATEGORY_ZONE) end,
+					setFunc = function(newValue) SetChatContainerTabCategoryEnabled(1,chatTabNumber,CHAT_CATEGORY_ZONE,newValue) end,
+					width = "full",
+				},
+				{
+					type = "checkbox",
+					name = GetString(PCHAT_CHAT_CHANNEL_ZONE_EN),
+					getFunc = function() return IsChatContainerTabCategoryEnabled(1,chatTabNumber,CHAT_CATEGORY_ZONE_ENGLISH) end,
+					setFunc = function(newValue) SetChatContainerTabCategoryEnabled(1,chatTabNumber,CHAT_CATEGORY_ZONE_ENGLISH,newValue) end,
+					width = "full",
+				},
+				{
+					type = "checkbox",
+					name = GetString(PCHAT_CHAT_CHANNEL_ZONE_FR),
+					getFunc = function() return IsChatContainerTabCategoryEnabled(1,chatTabNumber,CHAT_CATEGORY_ZONE_FRENCH) end,
+					setFunc = function(newValue) SetChatContainerTabCategoryEnabled(1,chatTabNumber,CHAT_CATEGORY_ZONE_FRENCH,newValue) end,
+					width = "full",
+				},
+				{
+					type = "checkbox",
+					name = GetString(PCHAT_CHAT_CHANNEL_ZONE_GR),
+					getFunc = function() return IsChatContainerTabCategoryEnabled(1,chatTabNumber,CHAT_CATEGORY_ZONE_GERMAN) end,
+					setFunc = function(newValue) SetChatContainerTabCategoryEnabled(1,chatTabNumber,CHAT_CATEGORY_ZONE_GERMAN,newValue) end,
+					width = "full",
+				},
+				{
+					type = "checkbox",
+					name = GetString(PCHAT_CHAT_CHANNEL_ZONE_JP),
+					getFunc = function() return IsChatContainerTabCategoryEnabled(1,chatTabNumber,CHAT_CATEGORY_ZONE_JAPANESE) end,
+					setFunc = function(newValue) SetChatContainerTabCategoryEnabled(1,chatTabNumber,CHAT_CATEGORY_ZONE_JAPANESE,newValue) end,
+					width = "full",
+				},
+				{
+					type = "checkbox",
+					name = nameOfGuild[1],
+					getFunc = function() return IsChatContainerTabCategoryEnabled(1,chatTabNumber,CHAT_CATEGORY_GUILD_1) end,
+					setFunc = function(newValue) SetChatContainerTabCategoryEnabled(1,chatTabNumber,CHAT_CATEGORY_GUILD_1,newValue) end,
+					width = "full",
+				},
+				{
+					type = "checkbox",
+					name = nameOfGuildOfficer[1],
+					getFunc = function() return IsChatContainerTabCategoryEnabled(1,chatTabNumber,CHAT_CATEGORY_OFFICER_1) end,
+					setFunc = function(newValue) SetChatContainerTabCategoryEnabled(1,chatTabNumber,CHAT_CATEGORY_OFFICER_1,newValue) end,
+					width = "full",
+				},
+				{
+					type = "checkbox",
+					name = nameOfGuild[2],
+					getFunc = function() return IsChatContainerTabCategoryEnabled(1,chatTabNumber,CHAT_CATEGORY_GUILD_2) end,
+					setFunc = function(newValue) SetChatContainerTabCategoryEnabled(1,chatTabNumber,CHAT_CATEGORY_GUILD_2,newValue) end,
+					width = "full",
+				},
+				{
+					type = "checkbox",
+					name = nameOfGuildOfficer[2],
+					getFunc = function() return IsChatContainerTabCategoryEnabled(1,chatTabNumber,CHAT_CATEGORY_OFFICER_2) end,
+					setFunc = function(newValue) SetChatContainerTabCategoryEnabled(1,chatTabNumber,CHAT_CATEGORY_OFFICER_2,newValue) end,
+					width = "full",
+				},
+				{
+					type = "checkbox",
+					name = nameOfGuild[3],
+					getFunc = function() return IsChatContainerTabCategoryEnabled(1,chatTabNumber,CHAT_CATEGORY_GUILD_3) end,
+					setFunc = function(newValue) SetChatContainerTabCategoryEnabled(1,chatTabNumber,CHAT_CATEGORY_GUILD_3,newValue) end,
+					width = "full",
+				},
+				{
+					type = "checkbox",
+					name = nameOfGuildOfficer[3],
+					getFunc = function() return IsChatContainerTabCategoryEnabled(1,chatTabNumber,CHAT_CATEGORY_OFFICER_3) end,
+					setFunc = function(newValue) SetChatContainerTabCategoryEnabled(1,chatTabNumber,CHAT_CATEGORY_OFFICER_3,newValue) end,
+					width = "full",
+				},
+				{
+					type = "checkbox",
+					name = nameOfGuild[4],
+					getFunc = function() return IsChatContainerTabCategoryEnabled(1,chatTabNumber,CHAT_CATEGORY_GUILD_4) end,
+					setFunc = function(newValue) SetChatContainerTabCategoryEnabled(1,chatTabNumber,CHAT_CATEGORY_GUILD_4,newValue) end,
+					width = "full",
+				},
+				{
+					type = "checkbox",
+					name = nameOfGuildOfficer[4],
+					getFunc = function() return IsChatContainerTabCategoryEnabled(1,chatTabNumber,CHAT_CATEGORY_OFFICER_4) end,
+					setFunc = function(newValue) SetChatContainerTabCategoryEnabled(1,chatTabNumber,CHAT_CATEGORY_OFFICER_4,newValue) end,
+					width = "full",
+				},
+				{
+					type = "checkbox",
+					name = nameOfGuild[5],
+					getFunc = function() return IsChatContainerTabCategoryEnabled(1,chatTabNumber,CHAT_CATEGORY_GUILD_5) end,
+					setFunc = function(newValue) SetChatContainerTabCategoryEnabled(1,chatTabNumber,CHAT_CATEGORY_GUILD_5,newValue) end,
+					width = "full",
+				},
+				{
+					type = "checkbox",
+					name = nameOfGuildOfficer[5],
+					getFunc = function() return IsChatContainerTabCategoryEnabled(1,chatTabNumber,CHAT_CATEGORY_OFFICER_5) end,
+					setFunc = function(newValue) SetChatContainerTabCategoryEnabled(1,chatTabNumber,CHAT_CATEGORY_OFFICER_5,newValue) end,
+					width = "full",
+				},
+			},
+		}
+		end
+	end
+--********dd********************************
 --  Guild Stuff
 --
 	for guild = 1, GetNumGuilds() do
@@ -6004,6 +6511,235 @@ local function RevertCategories(guildName)
 	
 end
 
+function pChat.CMD_TEST()
+	--d("pChat Debug : On")
+	local booTest = false
+	booTest = chkFCOCTB()
+	if booTest == true then d("chkFCOCTB True") else d("chkFCOCTB False") end
+	
+	
+end
+
+-- Registers the formatMessage function with the libChat to handle chat formatting.
+-- Unregisters itself from the player activation event with the event manager.
+local function OnPlayerActivated()
+	
+	pChatData.sceneFirst = false
+	
+	if isAddonLoaded then
+		
+		pChatData.activeTab = 1
+		
+		
+		--[[ZO_PreHook(CHAT_SYSTEM, "ValidateChatChannel", function(self)
+						
+						if (db.enableChatTabChannel  == true) and (self.currentChannel ~= CHAT_CHANNEL_WHISPER) then
+							local tabIndex = self.primaryContainer.currentBuffer:GetParent().tab.index
+							db.chatTabChannel[tabIndex] = db.chatTabChannel[tabIndex] or {}
+							db.chatTabChannel[tabIndex].channel = self.currentChannel
+							db.chatTabChannel[tabIndex].target  = self.currentTarget
+						end
+					end)]]--
+		ZO_PreHook(CHAT_SYSTEM, "ValidateChatChannel", function(self)
+						local tabIndex = self.primaryContainer.currentBuffer:GetParent().tab.index
+						-- if whisper then no action taken
+						if (self.currentChannel ~= CHAT_CHANNEL_WHISPER) then
+							-- if lock is valid check to see if default is on, and lock is on, and default not set to none--- set channel to default
+							if db.defaultChatTabChannelLock[tabIndex] then
+								if db.enableChatTabDefault == true and db.defaultChatTabChannelLock[tabIndex] == true and db.defaultTabChannel[tabIndex] ~= PCHAT_CHANNEL_NONE then
+									--db.chatTabChannel[tabIndex] = db.chatTabChannel[tabIndex] or {}
+									--db.chatTabChannel[tabIndex].channel = db.defaultTabChannel[tabIndex]
+									--db.chatTabChannel[tabIndex].target  = self.currentTarget
+									--setChannelLater(db.defaultTabChannel[tabIndex]
+									--setChannelLater = true
+									
+								else
+									-- if not default/locked/or none then check memory on and process
+									if db.enableChatTabChannel  == true then
+										db.chatTabChannel[tabIndex] = db.chatTabChannel[tabIndex] or {}
+										db.chatTabChannel[tabIndex].channel = self.currentChannel
+										db.chatTabChannel[tabIndex].target  = self.currentTarget
+									end
+								end
+							end
+						end
+					end)
+		--New Code
+		--[[
+		ZO_PreHook(CHAT_SYSTEM.primaryContainer, "HandleTabClick", function(self, tab) 
+					pChatData.activeTab = tab.index
+					d("pchat active tab "..pChatData.activeTab)
+					if db.enableChatTabChannel == true then
+						
+						if db.enableChatTabDefault == false then
+							if db.chatTabChannel[pChatData.activeTab] then
+								CHAT_SYSTEM:SetChannel(db.chatTabChannel[pChatData.activeTab].channel, db.chatTabChannel[pChatData.activeTab].target)
+							end
+						else
+							if db.defaultChatTabChannelLock[pChatData.activeTab] == true then
+								if db.defaultTabChannel[pChatData.activeTab] ~= PCHAT_CHANNEL_NONE then
+									CHAT_SYSTEM:SetChannel(db.defaultTabChannel[pChatData.activeTab].channel, nil) 
+								end
+							else
+								CHAT_SYSTEM:SetChannel(db.chatTabChannel[pChatData.activeTab].channel, db.chatTabChannel[pChatData.activeTab].target)
+							end
+						end
+					else
+						if db.enableChatTabDefault == true and db.defaultChatTabChannelLock[pChatData.activeTab] == true then
+							CHAT_SYSTEM:SetChannel(db.defaultTabChannel[pChatData.activeTab].channel, nil) 
+						end
+					end
+				end)
+				]]--
+		ZO_PreHook(CHAT_SYSTEM.primaryContainer, "HandleTabClick", function(self, tab) 
+					pChatData.activeTab = tab.index
+					if (db.enableChatTabChannel == true) then
+						if db.enableChatTabDefault == false then
+							if db.chatTabChannel[pChatData.activeTab] then
+								CHAT_SYSTEM:SetChannel(db.chatTabChannel[pChatData.activeTab].channel, db.chatTabChannel[pChatData.activeTab].target)
+							end
+						else 
+							if db.defaultChatTabChannelLock[pChatData.activeTab] then
+								if db.defaultChatTabChannelLock[pChatData.activeTab] == true then
+									if db.defaultTabChannel[pChatData.activeTab] ~= PCHAT_CHANNEL_NONE then
+										CHAT_SYSTEM:SetChannel(db.defaultTabChannel[pChatData.activeTab], nil) 
+									else
+										if db.chatTabChannel[pChatData.activeTab] then
+											CHAT_SYSTEM:SetChannel(db.chatTabChannel[pChatData.activeTab].channel, db.chatTabChannel[pChatData.activeTab].target)
+										end
+									end
+								else
+									--  if lock is default is true, lock is false db.defaultChatTabChannelLock[pChatData.activeTab] == false
+									if db.chatTabChannel[pChatData.activeTab] then
+										CHAT_SYSTEM:SetChannel(db.chatTabChannel[pChatData.activeTab].channel, db.chatTabChannel[pChatData.activeTab].target)
+									end
+								end
+							else
+								-- if db.defaultChatTabChannelLock[pChatData.activeTab] is nill
+								if db.chatTabChannel[pChatData.activeTab] then
+									CHAT_SYSTEM:SetChannel(db.chatTabChannel[pChatData.activeTab].channel, db.chatTabChannel[pChatData.activeTab].target)
+								end
+								
+							end
+						end
+					end
+					--ZO_TabButton_Text_RestoreDefaultColors(tab)
+				end)
+				
+				
+				
+				
+				
+		-- will be old code
+		--[[ZO_PreHook(CHAT_SYSTEM.primaryContainer, "HandleTabClick", function(self, tab) 
+					pChatData.activeTab = tab.index
+					-- check if in active group, enable partyswith and partytab are all true then suspend rememmbering chat channel
+					--if (activeGroup == true and db.enablepartyswitch== true and db.partyTab == activeTab) then suspendRememberChannel = true end
+					--if (db.enableChatTabChannel == true) and (suspendRememberChannel == false) then
+					if (db.enableChatTabChannel == true) then
+						local tabIndex = tab.index
+						if db.chatTabChannel[tabIndex] then
+							CHAT_SYSTEM:SetChannel(db.chatTabChannel[tabIndex].channel, db.chatTabChannel[tabIndex].target)
+						end
+					end
+					--ZO_TabButton_Text_RestoreDefaultColors(tab)
+				end)]]--
+
+		
+		-- Visual Notification PreHook
+		ZO_PreHook(CHAT_SYSTEM, "Maximize", function(self) 
+			CHAT_SYSTEM.IMLabelMin:SetHidden(true)			
+		end)
+		
+		--local fontPath = ZoFontChat:GetFontInfo()
+		--CHAT_SYSTEM:AddMessage(fontPath)
+		--CHAT_SYSTEM:AddMessage("|C3AF24BLorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur.|r")
+		--CHAT_SYSTEM:AddMessage("Characters below should be well displayed :")
+		--CHAT_SYSTEM:AddMessage("!\"#$%&'()*+,-./0123456789:;<=>?@ ABCDEFGHIJKLMNOPQRSTUVWXYZ [\]^_`abcdefghijklmnopqrstuvwxyz{|} ~¡£¤¥¦§©«-®°²³´µ¶·»½¿ ÀÁÂÄÆÇÈÉÊËÌÍÎÏÑÒÓÔÖ×ÙÚÛÜßàáâäæçèéêëìíîïñòóôöùúûüÿŸŒœ")
+		
+		-- AntiSpam
+		pChatData.spamLookingForEnabled = true
+		pChatData.spamWantToEnabled = true
+		pChatData.spamGuildRecruitEnabled = true
+		
+		-- Show 1000 lines instead of 200 & Change fade delay
+		ShowFadedLines()
+		-- Get Chat Tab Namse stored in chatTabNames {}
+		getTabNames()
+		-- Rebuild Lam Panel
+		isLAMRebuilt = true
+		BuildLAMPanel()
+		-- 
+		CreateNewChatTabPostHook()
+		
+		-- Should we minimize ?
+		MinimizeChatAtLaunch()
+		
+		-- Message for new chars
+		AutoSyncSettingsForNewPlayer()
+		
+		-- Chat Config synchronization
+		SyncChatConfig(db.chatSyncConfig, "lastChar")
+		SaveChatConfig()
+		
+		-- Tags next to entry box
+		UpdateCharCorrespondanceTableChannelNames()
+		
+		-- Update Swtches
+		UpdateCharCorrespondanceTableSwitchs()
+		CHAT_SYSTEM:CreateChannelData()
+		
+		-- Set default channel at login
+		if isFirstOnPlayerActivated == true then
+			SetToDefaultChannel()
+			isFirstOnPlayerActivated = false
+		end
+		
+		
+		-- Save all category colors
+		SaveGuildIndexes()
+		
+		-- Handle Copy text
+		CopyToTextEntryText()
+		
+		--**************************************
+		SLASH_COMMANDS["/pchat_test"] = pChat.CMD_TEST
+		--**************************************
+		-- Restore History if needed
+		RestoreChatHistory()
+		-- Default Tab
+		SetDefaultTab(db.defaultTab)
+		-- get default party tab
+		db.partyTab = getTabIdx(db.partyTabName)
+		-- Change Window apparence
+		ChangeChatWindowDarkness()
+		
+		-- libChat
+		-- registerFormat = message for EVENT_CHAT_MESSAGE_CHANNEL
+		-- registerFriendStatus = message for EVENT_FRIEND_PLAYER_STATUS_CHANGED
+		-- registerIgnoreAdd = message for EVENT_IGNORE_ADDED, registerIgnoreRemove = message for EVENT_IGNORE_REMOVED
+		-- registerGroupTypeChanged = message for EVENT_GROUP_TYPE_CHANGED
+		-- All those events outputs to the ChatSystem
+		PCHATLC:registerFormat(FormatMessage, ADDON_NAME)
+		
+		if not PCHATLC.manager.registerFriendStatus then
+			PCHATLC:registerFriendStatus(OnFriendPlayerStatusChanged, ADDON_NAME)
+		end
+		
+		PCHATLC:registerIgnoreAdd(OnIgnoreAdded, ADDON_NAME)
+		PCHATLC:registerIgnoreRemove(OnIgnoreRemoved, ADDON_NAME)
+		PCHATLC:registerGroupMemberLeft(OnGroupMemberLeft, ADDON_NAME)
+		PCHATLC:registerGroupTypeChanged(OnGroupTypeChanged, ADDON_NAME)
+		
+		isAddonInitialized = true
+		
+		EVENT_MANAGER:UnregisterForEvent(ADDON_NAME, EVENT_PLAYER_ACTIVATED)
+		
+	end
+	
+end
+
+
 -- Runs whenever "me" left a guild (or get kicked)
 local function OnSelfLeftGuild(_, _, guildName)
 
@@ -6023,22 +6759,51 @@ local function SwitchToParty(characterName)
 		
 			-- Switch to party channel when joinin a group
 			if db.enablepartyswitch then
-				CHAT_SYSTEM:SetChannel(CHAT_CHANNEL_PARTY)
+				--find current tab
+				if db.partyTab == nil or db.partyTab < 1 then
+					db.partyTab = getTabIdx(db.partyTabName)
+				end
+				-- Process get previous tab
+				-- set in active group
+				-- Change to party tab
+				-- get party tab previous channel
+				-- change party tab to party
+				if prevGroupTabIdx == 0 then prevGroupTabIdx = getActiveTabIdx() end
+				d("Current tab  1 "..prevGroupTabIdx)
+				--activeGroup = true
+				pChat_ChangeTab(db.partyTab)
+				if prevGroupChannel == 0 then prevGroupChannel = getActiveChannel() end
+				d("Prveious group channel  1 "..prevGroupChannel)
+				CHAT_SYSTEM:SetChannel(CHAT_CHANNEL_PARTY, nil)
 			end
 			
 		else
 			
 			-- Someone else joined group
 			-- If GetGroupSize() == 2 : Means "me" just created a group and "someone" just joining
-			 if GetGroupSize() == 2 then
+			 if GetGroupSize() >= 2 then
 				-- Switch to party channel when joinin a group
 				if db.enablepartyswitch then
-					CHAT_SYSTEM:SetChannel(CHAT_CHANNEL_PARTY)
+					if db.partyTab == nil or db.partyTab < 1 then
+						db.partyTab = getTabIdx(db.partyTabName)
+					end
+					-- Process get previous tab
+					-- set in active group
+					-- Change to party tab
+					-- get party tab previous channel
+					-- change party tab to party
+					if prevGroupTabIdx == 0 then prevGroupTabIdx = getActiveTabIdx() end
+					d("Current channel  2 "..prevGroupTabIdx)
+					--activeGroup = true
+					pChat_ChangeTab(db.partyTab)
+					if prevGroupChannel == 0 then prevGroupChannel = getActiveChannel() end
+					d("Prveious group channel  2 "..prevGroupChannel)
+					CHAT_SYSTEM:SetChannel(CHAT_CHANNEL_PARTY, nil)
 				end
 			 end
 			 
 		end
-	end, 200)
+	end, 400)
 	
 end
 
@@ -6054,10 +6819,23 @@ local function OnGroupMemberLeft(_, characterName, reason, wasMeWhoLeft)
 	if GetGroupSize() <= 1 then
 		-- Go back to default channel when leaving a group
 		if db.enablepartyswitch then
+			-- set active group as false
+			-- go to party tab (making sure tab is for party)
+			-- set channel of party tab to the previous channel
+			-- go to previous channel
+			-- make sure partyActive is false
+			--activeGroup = false
+			pChat_ChangeTab(db.partyTab)
+			CHAT_SYSTEM:SetChannel(prevGroupChannel, nil)
+			pChat_ChangeTab(prevGroupTabIdx)
+			prevGroupChannel = 0
+			prevGroupTabIdx = 0
+			--partyActive = false
+			
 			-- Only if we was on party
-			if CHAT_SYSTEM.currentChannel == CHAT_CHANNEL_PARTY and db.defaultchannel ~= PCHAT_CHANNEL_NONE then
-				SetToDefaultChannel()
-			end
+			--if CHAT_SYSTEM.currentChannel == CHAT_CHANNEL_PARTY and db.defaultchannel ~= PCHAT_CHANNEL_NONE then
+			--	SetToDefaultChannel()
+			--end
 		end
 	end
 	
@@ -6132,6 +6910,10 @@ local function ChatSystemShowOptions(tabIndex)
 	
 end
 
+
+
+
+
 -- Please note that some things are delayed in OnPlayerActivated() because Chat isn't ready when this function triggers
 local function OnAddonLoaded(_, addonName)
 
@@ -6155,8 +6937,16 @@ local function OnAddonLoaded(_, addonName)
 			StripLinesFromLineStrings(0)
 		end
 		
+		if not db.chatTabChannel then
+			db.chatTabChannel = {}
+		end
+		
 		if not db.LineStrings then
 			db.LineStrings = {}
+		end
+		
+		if not tabNames then
+			tabNames = {}
 		end
 		
 		-- Will set Keybind for "switch to next tab" if needed
@@ -6198,6 +6988,7 @@ local function OnAddonLoaded(_, addonName)
 			SaveChatHistory(3)
 			SaveChatConfig()
 		end)
+		
 		
 		-- Social option change color
 		ZO_PreHook("SetChatCategoryColor", SaveChatCategoriesColors)
@@ -6247,37 +7038,7 @@ local function OnAddonLoaded(_, addonName)
 	
 end
 
---Handled by keybind
-function pChat_ToggleChat()
-	
-	if CHAT_SYSTEM:IsMinimized() then
-		CHAT_SYSTEM:Maximize()
-	else
-		CHAT_SYSTEM:Minimize()
-	end
-	
-end
 
--- Called by bindings
-function pChat_WhispMyTarget()
-	if targetToWhisp then
-		CHAT_SYSTEM:StartTextEntry(nil, CHAT_CHANNEL_WHISPER, targetToWhisp)
-	end
-end
 
--- For compatibility. Called by others addons.
-function pChat.formatSysMessage(statusMessage)
-	return FormatSysMessage(statusMessage)
-end
-
--- For compatibility. Called by others addons.
-function pChat_FormatSysMessage(statusMessage)
-	return FormatSysMessage(statusMessage)
-end
-
--- For compatibility. Called by others addons.
-function pChat_GetChannelColors(channel, from)
-	return GetChannelColors(channel, from)
-end
 
 EVENT_MANAGER:RegisterForEvent(ADDON_NAME, EVENT_ADD_ON_LOADED, OnAddonLoaded)
