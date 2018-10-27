@@ -1,6 +1,6 @@
 <Bindings>
 	<Layer name="SI_KEYBINDINGS_LAYER_GENERAL">
-		<Category name="SI_KEYBINDINGS_CATEGORY_USER_INTERFACE">
+		<Category name="pChat">
 			<Action name="PCHAT_SWITCH_TAB">
 				<Down>pChat_SwitchToNextTab()</Down>
 			</Action>
@@ -13,8 +13,6 @@
 			<Action name="PCHAT_WHISPER_MY_TARGET">
 				<Down>pChat_WhispMyTarget()</Down>
 			</Action>
-		</Category>
-		<Category name="pChat">
 			<Action name="TAB_1">
 				<Down>
 					pChat_ChangeTab(1)

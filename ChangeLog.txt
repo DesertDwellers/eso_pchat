@@ -1,4 +1,100 @@
-﻿## v9.3.4.23 ## 
+﻿## v9.4.0.25 ##
+================
+-- Add Chat Tab Channel support.
+-- Reworked Enable Party Switch
+-- Default Channel per tab, replaces the defualt channel option.
+
+Need to do:
+
+* need to kill current options once know they work
+* remove default channel once verified that db.enableChatTabDefault works
+* confirmed in savedvars
+* for defaults - not set None then it overwrites last saved channel, if used.  Saved will overwrite default but not save it
+* for locked defaults will alwys be default, can use other channels but always goes back to default
+* both features need to work if remember channel is on or officer
+
+
+-- ====Remember Last Used Chat Channel===================
+-- Global to enable : db.enableChatTabChannel
+-- Stored Channels  : db.chatTabChannel[tabIndex]
+-- ------------------------------------------------------
+-- Used to rememmber the last channel used in a tab, except for whisper.  Handled in the preHook
+
+-- ====Default Channel Per Tab ==========================
+-- Global to enable : db.enableChatTabDefault
+-- Stored Channels  : db.defaultTabChannel[chatTabNumber]
+-- ------------------------------------------------------
+-- Sets the tab to default, on initial load it defaults all selected tabs to default no matter what is remembered.
+-- However, once chnaged by using another channel in a tab it will stay that way until reloadui or changed manually.
+-- Example Tab1 set to Zone, you do a message to /say, even though Tab1 should be Zone, it will now be /say until reloadui
+-- then will go back to Zone
+
+Not implmented yet.
+-- ====Default Chat Tab Lock=============================
+-- Global to enable : db.defaultChatTabChannelLock = {}
+-- Stored Channels  : db.defaultTabChannel[chatTabNumber]
+-- ------------------------------------------------------
+-- The enable above defines that the default tab selected is where the tab will be locked to.  So if the user selects a tab
+-- to be default locked, then they can send a message to any channel, but after the message is sent the tab reverts back to 
+-- the default.  For example, tab1 is set to Zone, you send a chat to /say, once chat goes, then tab1 reverts back to zone for
+-- next and subsequent chats.  This uses the same variable as Default for the channel stored per tab.
+
+
+
+
+## v9.3.11.25 ##
+================
+-- Updated LibCustomTitles
+-- Updated Manafest to support variable AddOnVersion
+
+This is an maintenance update, new version 9.4 is in development and will be released soon.  Was not ready to release before Murkmire update.
+
+-------------------------------------------------------------------------------
+
+## v9.3.10.24 ##
+===============
+-- Fixed issue Tells being stored as last chat channel for a tab.
+
+If you have the issue, simply choose a different channel for it along with sending a message.
+
+-------------------------------------------------------------------------------
+
+## v9.3.8.24 ##
+===============
+-- Fixed issue with AGS displaying messages of purchases.
+
+-------------------------------------------------------------------------------
+
+## v9.3.7.24 ##
+===============
+-- Default tab in settings now shows the tab names as opposed to the tab numbers.
+-- Updated libCustomTitles to the most recent version to address issues with RUEso add on.
+-- Remember to disable libCustomTitles follow the instructions http://www.esoui.com/downloads/info1765-DisableCustomTitles.html
+
+Known Issue: Default Channel for default tab is still not functioning, I released this update early to accomadate issues with RUEso addon.
+
+Note About Default Tab:  -- If tabs are renamed it may take a reloadui to get refresh the names, but as long as the tab number is still the same there will be no issue.  That is if you have your "Guild 1" tab as the default, and rename it to "G1", as long as the tab is in the same place the function for Default Tab will not be affected.
+
+-------------------------------------------------------------------------------
+
+## v9.3.6.24 ##
+===============
+-- Fix to 9.3.5.24, fixed default tab as it ceased to function. Programmer typo 
+-- Added support for library libCustomTitles, to disable it install the AddOn http://www.esoui.com/downloads/info1765-DisableCustomTitles.html
+
+-------------------------------------------------------------------------------
+
+## v9.3.5.24 ##
+===============
+-- Fix suggested by SlippyCheeze to avoid infinite loads
+-- Combined the old keybinds with the ones recently added, now all keybinds under heading pChat.
+-- Added Chat Tab Settings to addon menu.  For coming options.
+-- Added option to remember the last chat channel used in a tab.  (See Below)
+
+-------------------------------------------------------------------------------
+
+
+## v9.3.4.23## 
 ===============
 -- A fix put into place for line 1407 reported as a bad argument by Itabit
 -- Restructred Settings menu, using submenus instead of annoying long list.
